@@ -26,8 +26,8 @@ The future of hiring is not slower — it is smarter. Try the live demo today. S
 
 https://drive.google.com/file/d/1SyCY4QsamsSqYJMb7wDU1ZJXjLhfny6T/view?usp=sharing
 https://drive.google.com/file/d/1SyCY4QsamsSqYJMb7wDU1ZJXjLhfny6T/view?usp=drive_link
-file:///C:/Users/Lenovo/Downloads/result-card-video.html
-file:///C:/Users/Lenovo/Downloads/index%20(1).html
+https://drive.google.com/file/d/1liEK8MWi_lvqzA1RBjMdD-ml5vxuHpdd/view?usp=sharing
+https://drive.google.com/file/d/1V_EgTuccNro-BUCnfiDSfzjxPiK-nhXD/view?usp=sharing
 [[file:///C:/Users/Lenovo/OneDrive/Desktop/AI_Resume_Screening_Documentation%20(1).pdf](https://drive.google.com/file/d/1x6ZC-dYuP3yLwcvYZRPXCRAoFxKwynfR/view?usp=sharing)
 https://drive.google.com/file/d/1TTqOFwg0v04Gb39K1JSgO0-1hGG9ajFb/view?usp=sharing
 
