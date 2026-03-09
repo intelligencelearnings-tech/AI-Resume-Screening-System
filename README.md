@@ -28,6 +28,7 @@ https://drive.google.com/file/d/1SyCY4QsamsSqYJMb7wDU1ZJXjLhfny6T/view?usp=shari
 https://drive.google.com/file/d/1X9-_43z6xYH-hu3zlskMvD9JAI6wzkA2/view?usp=sharing
 [[file:///C:/Users/Lenovo/OneDrive/Desktop/AI_Resume_Screening_Documentation%20(1).pdf](https://drive.google.com/file/d/1x6ZC-dYuP3yLwcvYZRPXCRAoFxKwynfR/view?usp=sharing)
 https://drive.google.com/file/d/1TTqOFwg0v04Gb39K1JSgO0-1hGG9ajFb/view?usp=sharing
+https://drive.google.com/file/d/1V_EgTuccNro-BUCnfiDSfzjxPiK-nhXD/view?usp=sharing
 
 
 
