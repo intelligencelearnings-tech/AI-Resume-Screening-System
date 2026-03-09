@@ -1,0 +1,1094 @@
+{
+  "name": "🏢 AI Resume Screening",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cv-intake",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "d795af1e-f0c3-4e8c-90d1-3f1dd1afafee",
+      "name": "🌐 Webhook — CV Upload API",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -2448,
+        80
+      ],
+      "webhookId": "cv-intake-commercial"
+    },
+    {
+      "parameters": {
+        "format": "resolved",
+        "options": {}
+      },
+      "id": "eca08183-1446-44e9-bac1-51a990cb0599",
+      "name": "📧 Email Trigger — IMAP Intake",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [
+        -2448,
+        304
+      ],
+      "credentials": {
+        "imap": {
+          "id": "3U1ODsP0NyvqGNnY",
+          "name": "IMAP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst item = $input.item.json;\nconst now = Date.now();\n\nconst isWebhook = !!item.body || !!item.headers;\nconst isEmail   = !!item.from;\n\nlet submissionData = {};\nif (isWebhook) {\n  const body = item.body || item;\n  submissionData = {\n    tenant_id:    body.tenant_id    || 'default',\n    job_id:       body.job_id       || 'JOB_001',\n    source:       body.source       || 'web_form',\n    sender_email: body.applicant_email || 'unknown@email.com',\n    sender_name:  body.applicant_name  || 'Unknown',\n    email_subject: body.subject || 'CV Application',\n    intake_type:  'webhook'\n  };\n} else if (isEmail) {\n  const fromText = item.from && typeof item.from === 'object' ? item.from.text : (item.from || 'unknown@email.com');\n  submissionData = {\n    tenant_id:    'default',\n    job_id:       item.subject && item.subject.match(/JOB_[A-Z0-9]+/) ? item.subject.match(/JOB_[A-Z0-9]+/)[0] : 'JOB_001',\n    source:       'email',\n    sender_email: fromText,\n    sender_name:  (item.from && item.from.value && item.from.value[0]) ? item.from.value[0].name : 'Applicant',\n    email_subject: item.subject || 'CV Application',\n    intake_type:  'email'\n  };\n}\n\n// Rate limiting dedup key — same email + job within 5 min window\nconst rateKey = submissionData.sender_email.toLowerCase();\nconst submissionId = rateKey + '_' + submissionData.job_id + '_' + Math.floor(now/300000).toString();\n\n// File validation\nconst attachments = item.attachments || [];\nconst allowedExts = ['.pdf', '.docx', '.doc', '.txt'];\nlet fileValid = false;\nlet fileName = 'no_file';\nlet fileSize = 0;\nlet fileMime = '';\n\nif (attachments.length > 0) {\n  const file = attachments[0];\n  fileName = (file.fileName || file.filename || 'cv.pdf').toLowerCase();\n  fileSize = file.length || file.size || 0;\n  fileMime = file.contentType || file.mimeType || '';\n  const ext = '.' + fileName.split('.').pop();\n  fileValid = allowedExts.includes(ext) || fileMime.includes('pdf') || fileMime.includes('word') || fileMime.includes('text');\n  if (fileSize > 5 * 1024 * 1024) {\n    fileValid = false;\n    submissionData.rejection_reason = 'File exceeds 5MB limit';\n  }\n} else {\n  submissionData.rejection_reason = 'No attachment found';\n}\n\n// Prompt injection prevention — sanitize string fields\nfunction sanitize(str) {\n  if (!str) return '';\n  return String(str)\n    .replace(/ignore previous instructions/gi, '[BLOCKED]')\n    .replace(/system prompt/gi, '[BLOCKED]')\n    .replace(/you are now/gi, '[BLOCKED]')\n    .replace(/<script[^>]*>.*?<\\/script>/gi, '')\n    .replace(/<[^>]+>/g, '')\n    .substring(0, 500);\n}\nsubmissionData.sender_name  = sanitize(submissionData.sender_name);\nsubmissionData.sender_email = sanitize(submissionData.sender_email);\n\nconst validationPassed = fileValid && submissionData.sender_email.length > 3;\n\nreturn [{\n  json: {\n    ...submissionData,\n    submission_id:      submissionId,\n    file_name:          fileName,\n    file_size_kb:       Math.round(fileSize / 1024),\n    file_mime:          fileMime,\n    file_valid:         fileValid,\n    validation_passed:  validationPassed,\n    rejection_reason:   submissionData.rejection_reason || (validationPassed ? null : 'Validation failed'),\n    received_at:        new Date().toISOString(),\n    received_ts:        now,\n    _raw_attachments:   JSON.stringify(attachments.map(a => ({ name: a.fileName || a.filename, size: a.length || a.size, type: a.contentType || a.mimeType })))\n  }\n}];\n"
+      },
+      "id": "52e1395f-06a2-4996-9e28-76306522300b",
+      "name": "🔒 Security & Validation Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2272,
+        192
+      ],
+      "notes": "Rate limiting, file validation (type+size), input sanitization, prompt injection prevention"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.validation_passed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "looseTypeValidation": true
+        }
+      },
+      "id": "f77e18c3-944b-40e8-9413-df2c457936c7",
+      "name": "✅ Passes Validation?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2112,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d=$input.item.json;return [{json:{event:'INVALID_SUBMISSION',tenant_id:d.tenant_id,job_id:d.job_id,email:d.sender_email,reason:d.rejection_reason,file:d.file_name,ts:new Date().toISOString()}}];"
+      },
+      "id": "f6cdd7c1-3f98-4b52-aaf4-08e6653b312c",
+      "name": "🚫 Log Invalid & Reject",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1856,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1ygJTjK9RasmlxKa2ywGhk6o6ZG3ydUjpdCh_laJx1hE/edit?gid=0#gid=0",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Job Config tab",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1ygJTjK9RasmlxKa2ywGhk6o6ZG3ydUjpdCh_laJx1hE/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "3e161a79-2f7d-47f5-9d58-0477ad7ded75",
+      "name": "🗂️ Fetch Job Config",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -1872,
+        -16
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "0thpVOZ0RLeG5j2l",
+          "name": "Google Sheets OAuth2 API"
+        }
+      },
+      "notes": "JobConfigs sheet columns: job_id | job_title | company_name | tenant_id | job_description | shortlist_threshold | review_threshold | hiring_manager_email | slack_channel | is_active"
+    },
+    {
+      "parameters": {
+        "jsCode": "const submission = $('✅ Passes Validation?').item.json;\nconst jobConfig  = $input.item.json;\n\n// Get the original binary data (CV file) from the validation node\nconst binaryData = $('✅ Passes Validation?').item.binary || {};\n\nreturn [{\n  json: {\n    submission_id:        submission.submission_id,\n    tenant_id:            submission.tenant_id,\n    job_id:               submission.job_id,\n    source:               submission.source,\n    sender_email:         submission.sender_email,\n    sender_name:          submission.sender_name,\n    email_subject:        submission.email_subject,\n    intake_type:          submission.intake_type,\n    file_name:            submission.file_name,\n    file_size_kb:         submission.file_size_kb,\n    file_mime:            submission.file_mime,\n    received_at:          submission.received_at,\n    _raw_attachments:     submission._raw_attachments,\n\n    job_title:            jobConfig.job_title            || 'Software Engineer',\n    company_name:         jobConfig.company_name         || 'Our Company',\n    job_description:      jobConfig.job_description      || 'Not specified',\n    shortlist_threshold:  Number(jobConfig.shortlist_threshold) || 70,\n    review_threshold:     Number(jobConfig.review_threshold)    || 45,\n    hiring_manager_email: jobConfig.hiring_manager_email || 'hr@company.com',\n    slack_channel:        jobConfig.slack_channel        || '#hiring',\n    is_active:            jobConfig.is_active !== 'false',\n    dedup_key:            submission.sender_email.toLowerCase() + '_' + submission.job_id\n  },\n  binary: binaryData   // ← THIS IS THE FIX — passes CV file forward\n}];"
+      },
+      "id": "2f7a685d-4f3e-48e3-82a9-9284fc1c6c03",
+      "name": "🔄 Dedup Check & Merge Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1648,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {}
+      },
+      "id": "da285f55-0644-45f2-8043-6fd9369fe5d0",
+      "name": "📄 Extract PDF Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        -1456,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "options": {}
+      },
+      "id": "3db1b902-131c-4e56-bdcb-33a9fe3e679a",
+      "name": "📝 Extract DOCX Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        -1456,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst item  = $input.item.json;\nconst config = $('🔄 Dedup Check & Merge Config').item.json;\n\nlet rawText = item.text || item.content || item.data || '';\n\nif (!rawText || rawText.length < 20) {\n  const binaryData = item.binary;\n  if (binaryData) {\n    const firstKey = Object.keys(binaryData)[0];\n    if (binaryData[firstKey] && binaryData[firstKey].data) {\n      try { rawText = Buffer.from(binaryData[firstKey].data, 'base64').toString('utf-8'); } catch(e) {}\n    }\n  }\n}\n\nconst cleaned = rawText\n  .replace(/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/g, ' ')\n  .replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n').replace(/\\t/g, ' ')\n  .replace(/ {3,}/g, '  ')\n  .replace(/\\n{4,}/g, '\\n\\n')\n  .trim()\n  .substring(0, 8000);\n\nif (cleaned.length < 30) {\n  throw new Error('CV text too short (' + cleaned.length + ' chars). File may be image-based PDF, password-protected, or corrupted.');\n}\n\nreturn [{\n  json: {\n    ...config,\n    cv_text:       cleaned,\n    cv_char_count: cleaned.length,\n    cv_word_count: cleaned.split(/\\s+/).filter(Boolean).length,\n    extraction_ok: true\n  }\n}];\n"
+      },
+      "id": "8ac92993-b56b-43f0-8e53-26f108649f5d",
+      "name": "🧹 Clean & Validate CV Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1232,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Analyze this CV and return ONLY valid JSON:\n\nCV TEXT:\n{{ $json.cv_text }}\n\nJOB DESCRIPTION:\n{{ $json.job_description }}\n\nReturn this exact JSON structure:\n{\n  \"name\": \"\",\n  \"email\": \"\",\n  \"phone\": \"\",\n  \"current_role\": \"\",\n  \"years_experience\": 0,\n  \"education_level\": \"\",\n  \"skills_found\": [],\n  \"skills_missing\": [],\n  \"skills_score\": 0,\n  \"experience_score\": 0,\n  \"education_score\": 0,\n  \"communication_score\": 0,\n  \"final_score\": 0,\n  \"decision\": \"\",\n  \"summary\": \"\",\n  \"strengths\": \"\",\n  \"weaknesses\": \"\"\n}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "aaf80dee-dc99-41e2-a0dc-1b7f4bb057bc",
+      "name": "🧠 OpenAI GPT-4o-mini Analysis",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        -1104,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "openAiApi": {
+          "id": "DdwVzBMTMv711hMQ",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst aiRaw = $input.item.json.message && $input.item.json.message.content\n  ? $input.item.json.message.content\n  : ($input.item.json.content || $input.item.json.text || '');\n\nconst ctx = $('🧹 Clean & Validate CV Text').item.json;\n\n// Parse AI JSON response\nlet cv;\ntry {\n  const c = aiRaw.replace(/```json\\s*/gi,'').replace(/```\\s*/g,'').trim();\n  cv = JSON.parse(c);\n} catch(e1) {\n  try {\n    const m = aiRaw.match(/\\{[\\s\\S]*\\}/);\n    if (!m) throw new Error('No JSON object found');\n    cv = JSON.parse(m[0]);\n  } catch(e2) {\n    cv = {\n      name: ctx.sender_name, email: ctx.sender_email, phone: null, location: null,\n      linkedin: null, years_experience: 0, current_role: 'Unknown', current_company: null,\n      education_level: 'Unknown', education_institute: 'Unknown', graduation_year: null,\n      skills_found: [], skills_missing: [], skills_additional: [], certifications: [],\n      languages: [], employment_gaps: 'Parse failed', career_progression: 'Unknown',\n      skills_score: 0, experience_score: 0, education_score: 0, communication_score: 0,\n      leadership_score: 0, overall_ai_score: 0, decision: 'review', confidence: 'low',\n      strengths: [], weaknesses: ['AI parsing failed — manual review required'],\n      red_flags: ['Parse error: ' + e2.message], culture_fit_notes: '',\n      summary: 'CV could not be parsed automatically. Manual review needed.',\n      interview_questions: []\n    };\n  }\n}\n\n// Weighted scoring: Skills 35% | Experience 30% | Education 15% | Communication 10% | Leadership 10%\nconst W = { skills: 0.35, experience: 0.30, education: 0.15, communication: 0.10, leadership: 0.10 };\nconst S = {\n  skills:        Math.min(100, Math.max(0, Number(cv.skills_score)        || 0)),\n  experience:    Math.min(100, Math.max(0, Number(cv.experience_score)    || 0)),\n  education:     Math.min(100, Math.max(0, Number(cv.education_score)     || 0)),\n  communication: Math.min(100, Math.max(0, Number(cv.communication_score) || 0)),\n  leadership:    Math.min(100, Math.max(0, Number(cv.leadership_score)    || 0))\n};\nconst finalScore = Math.round(S.skills*W.skills + S.experience*W.experience + S.education*W.education + S.communication*W.communication + S.leadership*W.leadership);\n\nconst ST = ctx.shortlist_threshold || 70;\nconst RT = ctx.review_threshold    || 45;\nconst decision = finalScore >= ST ? 'shortlist' : finalScore >= RT ? 'review' : 'reject';\n\nlet priority;\nif      (finalScore >= 90) priority = '🏆 EXCEPTIONAL';\nelse if (finalScore >= 80) priority = '🔥 HOT';\nelse if (finalScore >= 70) priority = '⭐ SHORTLISTED';\nelse if (finalScore >= 55) priority = '👀 REVIEW+';\nelse if (finalScore >= 45) priority = '🔵 REVIEW';\nelse                        priority = '❌ REJECTED';\n\n// Bias flags for compliance\nconst biasFlags = [];\nif (cv.graduation_year && cv.graduation_year < 1990) biasFlags.push('Age indicator detected — anonymize before interview');\nif (cv.graduation_year && cv.graduation_year > 2024) biasFlags.push('Very recent graduate — ensure equal consideration');\n\n// Unique candidate ID\nconst candidateId = 'CND_' + Date.now().toString(36).toUpperCase() + '_' + Math.random().toString(36).substr(2,4).toUpperCase();\n\nconst auditRecord = {\n  candidateId, scoringVersion: '2.0', weights: W, rawScores: S,\n  finalScore, decision, decisionReason: 'Score ' + finalScore + '/100. Thresholds: shortlist>=' + ST + ', review>=' + RT,\n  biasFlags, aiConfidence: cv.confidence || 'unknown', scoredAt: new Date().toISOString()\n};\n\nconst arr = (a) => Array.isArray(a) ? a.join(', ') : (a || '');\n\nreturn [{\n  json: {\n    candidate_id:          candidateId,\n    submission_id:         ctx.submission_id,\n    dedup_key:             ctx.dedup_key,\n    tenant_id:             ctx.tenant_id,\n    job_id:                ctx.job_id,\n    job_title:             ctx.job_title,\n    company_name:          ctx.company_name,\n    hiring_manager_email:  ctx.hiring_manager_email,\n    slack_channel:         ctx.slack_channel,\n\n    name:                  cv.name || ctx.sender_name,\n    email:                 cv.email || ctx.sender_email,\n    phone:                 cv.phone || 'Not provided',\n    location:              cv.location || 'Not provided',\n    linkedin:              cv.linkedin || '',\n    current_role:          cv.current_role || 'Not specified',\n    current_company:       cv.current_company || '',\n    years_experience:      Number(cv.years_experience) || 0,\n    education_level:       cv.education_level || 'Unknown',\n    education_institute:   cv.education_institute || 'Unknown',\n    graduation_year:       cv.graduation_year || '',\n    career_progression:    cv.career_progression || 'Unknown',\n    employment_gaps:       cv.employment_gaps || 'None detected',\n\n    skills_found:          arr(cv.skills_found),\n    skills_missing:        arr(cv.skills_missing),\n    skills_additional:     arr(cv.skills_additional),\n    certifications:        arr(cv.certifications),\n    languages:             arr(cv.languages),\n\n    skills_score:          S.skills,\n    experience_score:      S.experience,\n    education_score:       S.education,\n    communication_score:   S.communication,\n    leadership_score:      S.leadership,\n    final_score:           finalScore,\n    ai_confidence:         cv.confidence || 'unknown',\n\n    decision:              decision,\n    priority:              priority,\n\n    strengths:             arr(cv.strengths),\n    weaknesses:            arr(cv.weaknesses),\n    red_flags:             arr(cv.red_flags) || 'None',\n    culture_fit_notes:     cv.culture_fit_notes || '',\n    summary:               cv.summary || '',\n    interview_questions:   arr(cv.interview_questions),\n    bias_flags:            biasFlags.join(' | ') || 'None',\n\n    file_name:             ctx.file_name,\n    cv_source:             ctx.source,\n    cv_word_count:         ctx.cv_word_count,\n    processed_at:          new Date().toISOString(),\n    processing_date:       new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Karachi' }),\n    processing_time:       new Date().toLocaleTimeString('en-PK', { timeZone: 'Asia/Karachi' }),\n    _audit:                JSON.stringify(auditRecord)\n  }\n}];\n"
+      },
+      "id": "d62d9b5b-254b-40aa-a8ff-4d65077503ec",
+      "name": "⚖️ Commercial Scoring Engine v2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -864,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1ygJTjK9RasmlxKa2ywGhk6o6ZG3ydUjpdCh_laJx1hE/edit?gid=0#gid=0",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Job Config tab",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1ygJTjK9RasmlxKa2ywGhk6o6ZG3ydUjpdCh_laJx1hE/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "JOB ID",
+              "displayName": "JOB ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "JOB TITLE",
+              "displayName": "JOB TITLE",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "COMPANY NAME",
+              "displayName": "COMPANY NAME",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "TENANT ID",
+              "displayName": "TENANT ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "JOB DESCRIPTION",
+              "displayName": "JOB DESCRIPTION",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SHORTLIST THRESHOLD",
+              "displayName": "SHORTLIST THRESHOLD",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "REVIEW THRESHOLD",
+              "displayName": "REVIEW THRESHOLD",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "HIRING MANAGER EMAIL",
+              "displayName": "HIRING MANAGER EMAIL",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SLACK CHANNEL",
+              "displayName": "SLACK CHANNEL",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "IS ACTIVE",
+              "displayName": "IS ACTIVE",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "4d671fca-942b-449a-bd68-2098421a3aa5",
+      "name": "💾 Save to Candidates DB",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -656,
+        16
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "0thpVOZ0RLeG5j2l",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1ygJTjK9RasmlxKa2ywGhk6o6ZG3ydUjpdCh_laJx1hE/edit?gid=0#gid=0",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 951837273,
+          "mode": "list",
+          "cachedResultName": "audit",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1ygJTjK9RasmlxKa2ywGhk6o6ZG3ydUjpdCh_laJx1hE/edit#gid=951837273"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "b594e764-37df-48cb-b667-6813891ff056",
+      "name": "📋 Write Compliance Audit Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -624,
+        448
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "0thpVOZ0RLeG5j2l",
+          "name": "Google Sheets OAuth2 API"
+        }
+      },
+      "notes": "GDPR/PDPA compliance — every screening decision logged with weights, reasoning, and bias flags"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "shortlist",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "shortlist"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "review",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "review"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "reject",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "reject"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "7bca4d95-5a7e-4ed7-8cef-efebdc6df2f7",
+      "name": "🔀 Route by Decision",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -464,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "=🎉 Interview Invitation — {{ $json.job_title }} at {{ $json.company_name }}",
+        "message": "=<!DOCTYPE html><html><head><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f7fa;padding:20px}.w{max-width:600px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.1)}.h{background:linear-gradient(135deg,#0D1B2A,#0077A8);padding:32px 28px;color:#fff}.h h1{font-size:20px;margin-bottom:6px}.h p{opacity:.8;font-size:13px}.b{padding:28px}.sc{background:#f0fdf4;border:2px solid #22c55e;border-radius:10px;padding:20px;text-align:center;margin:20px 0}.sc .n{font-size:48px;font-weight:800;color:#15803d}.sk{background:#eff6ff;border-left:4px solid #3b82f6;padding:14px 18px;border-radius:0 8px 8px 0;margin:16px 0}.ft{background:#f8fafc;padding:16px 28px;font-size:11px;color:#6b7280;border-top:1px solid #e2e8f0}</style></head><body><div class='w'><div class='h'><h1>🎉 Congratulations, {{ $json.name }}!</h1><p>{{ $json.company_name }} · {{ $json.job_title }}</p></div><div class='b'><p style='font-size:15px;color:#374151;line-height:1.6'>Dear <strong>{{ $json.name }}</strong>,</p><br><p style='color:#374151;line-height:1.7'>We have reviewed your CV and are <strong>delighted to invite you for an interview</strong> for <strong>{{ $json.job_title }}</strong>.</p><div class='sc'><div class='n'>{{ $json.final_score }}/100</div><div style='font-size:12px;color:#374151;margin-top:4px'>Profile Match · {{ $json.priority }}</div></div><div class='sk'><strong style='color:#1e3a5f'>✅ Your matching skills:</strong><br><span style='color:#3b82f6;font-size:13px'>{{ $json.skills_found }}</span></div><p style='color:#374151;line-height:1.7;font-size:14px'>{{ $json.summary }}</p><br><p style='color:#374151;font-size:14px'>Please reply with your available times and preferred interview format (video/in-person).</p><br><p style='color:#374151;font-size:13px'>Ref: <code>{{ $json.candidate_id }}</code></p></div><div class='ft'>{{ $json.company_name }} Recruitment · {{ $json.candidate_id }}</div></div></body></html>",
+        "options": {}
+      },
+      "id": "97fda996-9c0e-4854-876e-ad2f583de478",
+      "name": "✉️ Email — Interview Invite",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -160,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "webhookId": "73791f8c-19e9-4862-bddf-88571706cdfe",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "Gehdsqbzp4vYOEDu",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "hhttps://console.twilio.com/dashboard?variant_override=non-dev",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "twilioApi",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "To",
+              "value": "=whatsapp:{{ $json.phone }}"
+            },
+            {
+              "name": "From",
+              "value": "whatsapp:+14155238886"
+            },
+            {
+              "name": "Body",
+              "value": "=Hello {{ $json.name }}! Congratulations, you have been SHORTLISTED for {{ $json.job_title }} at {{ $json.company_name }}. Score: {{ $json.final_score }}/100. HR will contact you within 24 hours. Ref: {{ $json.candidate_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5ab1f745-a368-4b80-909e-d2d8be72fe76",
+      "name": "💬 WhatsApp — Candidate Notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        192,
+        368
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "LznonbkbuNAYJMfW",
+          "name": "Unnamed credential"
+        },
+        "twilioApi": {
+          "id": "DkTqljKGf7bJ6qOd",
+          "name": "Twilio account"
+        }
+      },
+      "notes": "Replace YOUR_ACCOUNT_SID in URL with your Twilio Account SID"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.hiring_manager_email }}",
+        "subject": "=👀 Manual Review Needed — {{ $json.name }} ({{ $json.final_score }}/100) | {{ $json.job_title }}",
+        "message": "=<html><body style='font-family:Arial,sans-serif;max-width:600px;margin:0 auto'><div style='background:#1e3a5f;color:white;padding:24px;border-radius:8px 8px 0 0'><h2 style='margin:0'>👀 Review Queue — Manual Assessment Required</h2></div><div style='padding:24px;background:#fff;border:1px solid #e2e8f0'><p>A candidate scored in the <strong>review range</strong> and needs your assessment.</p><table style='width:100%;border-collapse:collapse;margin:16px 0;font-size:14px'><tr style='background:#f8fafc'><td style='padding:10px;border:1px solid #e2e8f0;font-weight:700'>Name</td><td style='padding:10px;border:1px solid #e2e8f0'>{{ $json.name }}</td></tr><tr><td style='padding:10px;border:1px solid #e2e8f0;font-weight:700'>AI Score</td><td style='padding:10px;border:1px solid #e2e8f0'>{{ $json.final_score }}/100 — {{ $json.priority }}</td></tr><tr style='background:#f8fafc'><td style='padding:10px;border:1px solid #e2e8f0;font-weight:700'>Experience</td><td style='padding:10px;border:1px solid #e2e8f0'>{{ $json.years_experience }} yrs — {{ $json.current_role }}</td></tr><tr><td style='padding:10px;border:1px solid #e2e8f0;font-weight:700'>Education</td><td style='padding:10px;border:1px solid #e2e8f0'>{{ $json.education_level }} — {{ $json.education_institute }}</td></tr><tr style='background:#f8fafc'><td style='padding:10px;border:1px solid #e2e8f0;font-weight:700'>Skills Found</td><td style='padding:10px;border:1px solid #e2e8f0'>{{ $json.skills_found }}</td></tr><tr><td style='padding:10px;border:1px solid #e2e8f0;font-weight:700'>Skills Missing</td><td style='padding:10px;border:1px solid #e2e8f0'>{{ $json.skills_missing }}</td></tr><tr style='background:#f8fafc'><td style='padding:10px;border:1px solid #e2e8f0;font-weight:700'>Red Flags</td><td style='padding:10px;border:1px solid #e2e8f0'>{{ $json.red_flags }}</td></tr><tr><td style='padding:10px;border:1px solid #e2e8f0;font-weight:700'>Bias Flags</td><td style='padding:10px;border:1px solid #e2e8f0'>{{ $json.bias_flags }}</td></tr><tr style='background:#f8fafc'><td style='padding:10px;border:1px solid #e2e8f0;font-weight:700'>Summary</td><td style='padding:10px;border:1px solid #e2e8f0'>{{ $json.summary }}</td></tr></table><p style='font-size:12px;color:#6b7280'>Candidate ID: {{ $json.candidate_id }}</p></div></body></html>",
+        "options": {}
+      },
+      "id": "44ee6987-1266-478e-854e-f303fd579b97",
+      "name": "✉️ Email — Review Alert to HR",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -160,
+        224
+      ],
+      "webhookId": "02589334-a6f6-44c7-bd4c-992dec072281",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "Gehdsqbzp4vYOEDu",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "=Application Update — {{ $json.job_title }} at {{ $json.company_name }}",
+        "message": "=<html><body style='font-family:Arial,sans-serif;max-width:600px;margin:0 auto'><div style='background:#374151;color:white;padding:24px;border-radius:8px 8px 0 0'><h2 style='margin:0'>Thank You for Applying</h2></div><div style='padding:24px;background:#fff;border:1px solid #e2e8f0'><p>Dear <strong>{{ $json.name }}</strong>,</p><br><p style='color:#374151;line-height:1.7'>Thank you for applying for <strong>{{ $json.job_title }}</strong> at <strong>{{ $json.company_name }}</strong>. After reviewing your application, we will not be proceeding with your candidacy for this role at this time.</p><p style='color:#374151;line-height:1.7;margin-top:12px'>We appreciate your interest and encourage you to apply for future openings.</p><br><p style='color:#374151'>Best regards,<br><strong>{{ $json.company_name }} HR Team</strong></p><hr style='margin:20px 0;border-color:#e2e8f0'><p style='color:#9ca3af;font-size:11px'>Ref: {{ $json.candidate_id }}</p></div></body></html>",
+        "options": {}
+      },
+      "id": "2e865240-0cce-45e6-8fe5-d6ae838f5197",
+      "name": "✉️ Email — Rejection",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -160,
+        448
+      ],
+      "webhookId": "57bbc6f6-fd4b-46e8-837c-80de97122109",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "Gehdsqbzp4vYOEDu",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, candidate_id: $json.candidate_id, submission_id: $json.submission_id, score: $json.final_score, decision: $json.decision, priority: $json.priority, processed_at: $json.processed_at }) }}",
+        "options": {}
+      },
+      "id": "ff9c0188-56d9-4701-ade7-c70e607c3008",
+      "name": "🔁 API Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        176,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "0e398f50-003e-4587-8587-c3f059311861",
+      "name": "🚨 Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1904,
+        672
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst error = $input.item.json;\nreturn [{\n  json: {\n    timestamp:      new Date().toISOString(),\n    error_type:     error.name || 'UnknownError',\n    error_message:  error.message || 'Unknown error',\n    workflow_name:  'AI Resume Screening COMMERCIAL v2',\n    node_name:      error.node && error.node.name ? error.node.name : 'unknown',\n    execution_id:   error.execution && error.execution.id ? error.execution.id : 'unknown',\n    error_data:     JSON.stringify(error).substring(0, 2000),\n    severity:       (error.message || '').includes('OpenAI') ? 'HIGH' : 'MEDIUM'\n  }\n}];\n"
+      },
+      "id": "284505bd-a1ef-4cbd-84c4-f987894fcb32",
+      "name": "⚙️ Process Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1584,
+        672
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1ygJTjK9RasmlxKa2ywGhk6o6ZG3ydUjpdCh_laJx1hE/edit?gid=502310065#gid=502310065",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 502310065,
+          "mode": "list",
+          "cachedResultName": "ErrorLog",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1ygJTjK9RasmlxKa2ywGhk6o6ZG3ydUjpdCh_laJx1hE/edit#gid=502310065"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error_type",
+              "displayName": "error_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error_message",
+              "displayName": "error_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "workflow_name",
+              "displayName": "workflow_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "node_name",
+              "displayName": "node_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "execution_id",
+              "displayName": "execution_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error_data",
+              "displayName": "error_data",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "severity",
+              "displayName": "severity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "e192dc19-7b36-4d95-bc9e-839d46c7a6b6",
+      "name": "📝 Log Error",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -1248,
+        672
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "0thpVOZ0RLeG5j2l",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "intelligencelearnings@gmail.com",
+        "subject": "=🚨 [{{ $json.severity }}] n8n Error — {{ $json.node_name }} | {{ $json.timestamp }}",
+        "message": "=<h2 style='color:#dc2626'>🚨 Workflow Error</h2><p><b>Node:</b> {{ $json.node_name }}</p><p><b>Error:</b> {{ $json.error_message }}</p><p><b>Severity:</b> {{ $json.severity }}</p><p><b>Execution:</b> {{ $json.execution_id }}</p><p><b>Time:</b> {{ $json.timestamp }}</p><pre style='background:#f1f5f9;padding:12px;font-size:12px;border-radius:6px'>{{ $json.error_data }}</pre>",
+        "options": {}
+      },
+      "id": "ca633f35-a564-4b5f-80ca-bc40a019b1cc",
+      "name": "📧 Error Alert Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -912,
+        672
+      ],
+      "webhookId": "f45505a9-f842-4469-985e-ceb1d279e172",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "Gehdsqbzp4vYOEDu",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0AKL0BDJTT",
+          "mode": "list",
+          "cachedResultName": "hiring"
+        },
+        "text": "=🔥 New Shortlisted Candidate!  Name: {{ $json.name }} Score: {{ $json.final_score }}/100 Role: {{ $json.current_role }} Skills: {{ $json.skills_found }} Decision: {{ $json.decision }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        176,
+        192
+      ],
+      "id": "245d1edb-7b25-4193-a232-2ada418b0dc5",
+      "name": "Send a message",
+      "webhookId": "71a0ce97-b0f7-46cd-861a-0aa24ef2072d",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "qj8zjMCtz3pKV3rT",
+          "name": "Slack OAuth2 API"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "🌐 Webhook — CV Upload API": {
+      "main": [
+        [
+          {
+            "node": "🔒 Security & Validation Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📧 Email Trigger — IMAP Intake": {
+      "main": [
+        [
+          {
+            "node": "🔒 Security & Validation Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔒 Security & Validation Gate": {
+      "main": [
+        [
+          {
+            "node": "✅ Passes Validation?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "✅ Passes Validation?": {
+      "main": [
+        [
+          {
+            "node": "🗂️ Fetch Job Config",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "🚫 Log Invalid & Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🗂️ Fetch Job Config": {
+      "main": [
+        [
+          {
+            "node": "🔄 Dedup Check & Merge Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔄 Dedup Check & Merge Config": {
+      "main": [
+        [
+          {
+            "node": "📄 Extract PDF Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📄 Extract PDF Text": {
+      "main": [
+        [
+          {
+            "node": "🧹 Clean & Validate CV Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📝 Extract DOCX Text": {
+      "main": [
+        [
+          {
+            "node": "🧹 Clean & Validate CV Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🧹 Clean & Validate CV Text": {
+      "main": [
+        [
+          {
+            "node": "🧠 OpenAI GPT-4o-mini Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🧠 OpenAI GPT-4o-mini Analysis": {
+      "main": [
+        [
+          {
+            "node": "⚖️ Commercial Scoring Engine v2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚖️ Commercial Scoring Engine v2": {
+      "main": [
+        [
+          {
+            "node": "💾 Save to Candidates DB",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "📋 Write Compliance Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "💾 Save to Candidates DB": {
+      "main": [
+        [
+          {
+            "node": "🔀 Route by Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔀 Route by Decision": {
+      "main": [
+        [
+          {
+            "node": "✉️ Email — Interview Invite",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "💬 WhatsApp — Candidate Notify",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "✉️ Email — Review Alert to HR",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "✉️ Email — Rejection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "✉️ Email — Interview Invite": {
+      "main": [
+        [
+          {
+            "node": "🔁 API Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "✉️ Email — Review Alert to HR": {
+      "main": [
+        [
+          {
+            "node": "🔁 API Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "✉️ Email — Rejection": {
+      "main": [
+        [
+          {
+            "node": "🔁 API Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🚨 Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "⚙️ Process Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚙️ Process Error": {
+      "main": [
+        [
+          {
+            "node": "📝 Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📝 Log Error": {
+      "main": [
+        [
+          {
+            "node": "📧 Error Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "ec96767c-b3ab-4a2f-b051-a2bc2fc2eb0d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "000e26dc09c14bf3bf1ee39d527d7111b74c80d1b9807998a029b203eea5b6b2"
+  },
+  "id": "CkPjl2QdVAOcjHc7",
+  "tags": [
+    {
+      "updatedAt": "2026-03-07T20:48:45.046Z",
+      "createdAt": "2026-03-07T20:48:45.046Z",
+      "id": "IxDvdPPXxeLqPyDN",
+      "name": "v2.0"
+    },
+    {
+      "updatedAt": "2026-03-07T20:48:44.979Z",
+      "createdAt": "2026-03-07T20:48:44.979Z",
+      "id": "Q1tlpWSEKBF8qRDf",
+      "name": "AI"
+    },
+    {
+      "updatedAt": "2026-03-07T20:48:45.010Z",
+      "createdAt": "2026-03-07T20:48:45.010Z",
+      "id": "jhq4zZZ5AYwWZC3x",
+      "name": "Commercial"
+    },
+    {
+      "updatedAt": "2026-03-07T20:48:44.936Z",
+      "createdAt": "2026-03-07T20:48:44.936Z",
+      "id": "kyPJcpvo17GlIYBG",
+      "name": "Production"
+    }
+  ]
+}
